@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Lobby</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; }
+        .hidden { display: none; }
+        .card { border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
+        .player-list { margin-top: 20px; padding-top: 10px; border-top: 2px solid #eee; }
+    </style>
+</head>
+<body>
+
+    <h1>Game Lobby</h1>
+
+    <div id="setup-view">
+        <input type="text" id="username" placeholder="Enter your name">
+        <div id="actions">
+            <button id="btn-create" onclick="createGame()">Create Game</button>
+            <button id="btn-join" onclick="joinGame()">Join Existing Game</button>
+        </div>
+    </div>
+
+    <div id="game-view" class="hidden">
+        <h2>In Lobby: <span id="status-text"></span></h2>
+        <div class="player-list">
+            <h3>Players in this game:</h3>
+            <ul id="list-players"></ul>
+        </div>
+        <button onclick="leaveGame()">Leave Game</button>
+    </div>
+
+    <script>
+        // REPLACE WITH YOUR KEYS
+        const supabase = supabase.createClient('YOUR_SUPABASE_URL', 'YOUR_SUPABASE_ANON_KEY');
+        
+        let currentGameId = null;
+        let myId = null;
+
+        // Init
+        checkGameStatus();
+
+        // Subscribe to real-time changes
+        supabase.channel('public:games').on('postgres_changes', { event: '*', schema: 'public', table: 'games' }, checkGameStatus).subscribe();
+        supabase.channel('public:players').on('postgres_changes', { event: '*', schema: 'public', table: 'players' }, updatePlayerList).subscribe();
+
+        async function checkGameStatus() {
+            const { data: games } = await supabase.from('games').select('*').neq('status', 'finished');
+            const btnCreate = document.getElementById('btn-create');
+            const btnJoin = document.getElementById('btn-join');
+
+            if (games && games.length > 0) {
+                btnCreate.classList.add('hidden'); // Hide create if game exists
+                btnJoin.classList.remove('hidden');
+                currentGameId = games[0].id;
+            } else {
+                btnCreate.classList.remove('hidden');
+                btnJoin.classList.remove('hidden');
+                currentGameId = null;
+            }
+            updatePlayerList();
+        }
+
+        async function createGame() {
+            const name = document.getElementById('username').value || 'Player';
+            const { data: game } = await supabase.from('games').insert({}).select().single();
+            currentGameId = game.id;
+            await joinGame();
+        }
+
+        async function joinGame() {
+            const name = document.getElementById('username').value || 'Player';
+            if (!currentGameId) return alert("No game to join!");
+
+            // Check count
+            const { count } = await supabase.from('players').select('*', { count: 'exact', head: true }).eq('game_id', currentGameId);
+            if (count >= 4) return alert("Game is full!");
+
+            const { data: player } = await supabase.from('players').insert({ game_id: currentGameId, name: name }).select().single();
+            myId = player.id;
+            document.getElementById('setup-view').classList.add('hidden');
+            document.getElementById('game-view').classList.remove('hidden');
+        }
+
+        async function updatePlayerList() {
+            if (!currentGameId) return;
+            const { data: players } = await supabase.from('players').select('*').eq('game_id', currentGameId);
+            const list = document.getElementById('list-players');
+            list.innerHTML = players.map(p => `<li>${p.name}</li>`).join('');
+            document.getElementById('status-text').innerText = players.length >= 4 ? "Full" : "Waiting for players";
+        }
+
+        async function leaveGame() {
+            if (myId) await supabase.from('players').delete().eq('id', myId);
+            location.reload();
+        }
+    </script>
+</body>
+</html>
