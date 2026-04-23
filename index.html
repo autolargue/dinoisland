@@ -10,6 +10,7 @@
         .hidden { display: none; }
         .card { border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
         .player-list { margin-top: 20px; padding-top: 10px; border-top: 2px solid #eee; }
+        input { display: block; margin: 10px 0; padding: 8px; width: 100%; box-sizing: border-box; }
     </style>
 </head>
 <body>
@@ -18,14 +19,16 @@
 
     <div id="setup-view">
         <input type="text" id="username" placeholder="Enter your name">
+        <input type="text" id="game-code" placeholder="Enter Game Code (e.g., cool-lobby)">
+        
         <div id="actions">
             <button id="btn-create" onclick="createGame()">Create Game</button>
-            <button id="btn-join" onclick="joinGame()">Join Existing Game</button>
+            <button id="btn-join" onclick="joinGame()">Join Game with Code</button>
         </div>
     </div>
 
     <div id="game-view" class="hidden">
-        <h2>In Lobby: <span id="status-text"></span></h2>
+        <h2>Lobby: <span id="lobby-code-display"></span></h2>
         <div class="player-list">
             <h3>Players in this game:</h3>
             <ul id="list-players"></ul>
@@ -43,44 +46,57 @@
         // Init
         checkGameStatus();
 
-        // Subscribe to real-time changes
+        // Real-time listener
         supabase.channel('public:games').on('postgres_changes', { event: '*', schema: 'public', table: 'games' }, checkGameStatus).subscribe();
         supabase.channel('public:players').on('postgres_changes', { event: '*', schema: 'public', table: 'players' }, updatePlayerList).subscribe();
 
         async function checkGameStatus() {
             const { data: games } = await supabase.from('games').select('*').neq('status', 'finished');
             const btnCreate = document.getElementById('btn-create');
-            const btnJoin = document.getElementById('btn-join');
-
+            
+            // If a game exists, hide the Create button
             if (games && games.length > 0) {
-                btnCreate.classList.add('hidden'); // Hide create if game exists
-                btnJoin.classList.remove('hidden');
-                currentGameId = games[0].id;
+                btnCreate.classList.add('hidden');
             } else {
                 btnCreate.classList.remove('hidden');
-                btnJoin.classList.remove('hidden');
-                currentGameId = null;
             }
             updatePlayerList();
         }
 
         async function createGame() {
             const name = document.getElementById('username').value || 'Player';
-            const { data: game } = await supabase.from('games').insert({}).select().single();
+            const code = document.getElementById('game-code').value;
+            
+            if (!code) return alert("Please enter a game code to create a game.");
+
+            const { data: game, error } = await supabase.from('games').insert({ code: code }).select().single();
+            if (error) return alert("Error creating game: " + error.message);
+            
             currentGameId = game.id;
-            await joinGame();
+            await joinGame(true); // Join automatically after creation
         }
 
-        async function joinGame() {
+        async function joinGame(isCreator = false) {
             const name = document.getElementById('username').value || 'Player';
-            if (!currentGameId) return alert("No game to join!");
+            const code = document.getElementById('game-code').value;
 
-            // Check count
+            if (!code) return alert("Please enter the game code to join!");
+
+            // Find the game by code
+            const { data: game } = await supabase.from('games').select('*').eq('code', code).maybeSingle();
+            
+            if (!game) return alert("Game not found with that code!");
+            currentGameId = game.id;
+
+            // Check if full
             const { count } = await supabase.from('players').select('*', { count: 'exact', head: true }).eq('game_id', currentGameId);
             if (count >= 4) return alert("Game is full!");
 
+            // Join
             const { data: player } = await supabase.from('players').insert({ game_id: currentGameId, name: name }).select().single();
             myId = player.id;
+            
+            document.getElementById('lobby-code-display').innerText = code;
             document.getElementById('setup-view').classList.add('hidden');
             document.getElementById('game-view').classList.remove('hidden');
         }
@@ -89,8 +105,7 @@
             if (!currentGameId) return;
             const { data: players } = await supabase.from('players').select('*').eq('game_id', currentGameId);
             const list = document.getElementById('list-players');
-            list.innerHTML = players.map(p => `<li>${p.name}</li>`).join('');
-            document.getElementById('status-text').innerText = players.length >= 4 ? "Full" : "Waiting for players";
+            list.innerHTML = players ? players.map(p => `<li>${p.name}</li>`).join('') : '';
         }
 
         async function leaveGame() {
